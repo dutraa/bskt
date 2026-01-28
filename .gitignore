@@ -1,18 +1,19 @@
 # Secrets
 .env
 .env.*
+!.env.example
 secrets.yaml
 **/secrets.yaml
 
 # Foundry
-out/
-broadcast/
-cache/
+**/broadcast/
+**/cache/
+**/out/
 
 # Node / CRE
 node_modules/
-tmp.wasm
-tmp.js
+dist/
+tmp.*
 
 # OS
 .DS_Store
