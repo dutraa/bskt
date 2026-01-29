@@ -1,0 +1,12 @@
+[submodule "basket-contracts/lib/openzeppelin-contracts"]
+	path = basket-contracts/lib/openzeppelin-contracts
+	url = https://github.com/OpenZeppelin/openzeppelin-contracts
+[submodule "basket-contracts/lib/openzeppelin-contracts-upgradeable"]
+	path = basket-contracts/lib/openzeppelin-contracts-upgradeable
+	url = https://github.com/OpenZeppelin/openzeppelin-contracts-upgradeable
+[submodule "basket-contracts/lib/chainlink-ace"]
+	path = basket-contracts/lib/chainlink-ace
+	url = https://github.com/smartcontractkit/chainlink-ace
+[submodule "basket-contracts/lib/forge-std"]
+	path = basket-contracts/lib/forge-std
+	url = https://github.com/foundry-rs/forge-std

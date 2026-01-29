@@ -9,6 +9,7 @@ optimizer_runs = 200
 remappings = [
   "@openzeppelin/contracts/=lib/openzeppelin-contracts/contracts/",
   "@openzeppelin/contracts-upgradeable/=lib/openzeppelin-contracts-upgradeable/contracts/",
-  "@chainlink/policy-management/=lib/chainlink-ace/packages/policy-management/src/"
+  "@chainlink/policy-management/=lib/chainlink-ace/packages/policy-management/src/",
+  "forge-std/=lib/forge-std/src/"
 ]
 

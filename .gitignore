@@ -24,3 +24,12 @@ basket-contracts/lib/
 # Foundry (all nested)
 **/broadcast/
 **/cache/
+
+# Documentation (local only)
+# Documentation
+docs/chainlink/
+
+# Backend
+backend/.env
+backend/node_modules/
+backend/dist/

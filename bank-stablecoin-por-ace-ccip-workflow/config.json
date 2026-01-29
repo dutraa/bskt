@@ -12,5 +12,7 @@
     "chainSelector": "14767482510784806043"
   },
   "porApiUrl": "file://./mock-por-response.json",
-  "decimals": 18
+  "decimals": 18,
+  "stablecoinAddress": "0xd7b6f62a6a01bd7626c8cf6252ed717243c8f2f8",
+  "mintingConsumerAddress": "0xf07ed51bc946bf21bf0f366f9e12cf3b2931166a"
 }
