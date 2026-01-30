@@ -76,10 +76,9 @@ async function executeWorkflow(): Promise<string> {
         console.log(`[WORKFLOW] Executing CRE workflow in ${WORKFLOW_DIR}`);
 
         // Change to workflow directory and run the workflow
-        // This assumes you have a script or command to run the workflow
-        // Adjust the command based on your actual workflow execution method
-        // Using absolute path to bun to avoid PATH issues in WSL/subprocesses
-        const command = `cd ${WORKFLOW_DIR} && /home/shirosuke/.bun/bin/bun run main.ts`;
+        // We use 'bun' from the environment PATH or a configurable BUN_PATH
+        const bunCmd = process.env.BUN_PATH || 'bun';
+        const command = `cd ${WORKFLOW_DIR} && ${bunCmd} run main.ts`;
 
         const { stdout, stderr } = await execAsync(command, {
             maxBuffer: 1024 * 1024 * 10 // 10MB buffer

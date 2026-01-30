@@ -42,6 +42,22 @@ Express server that exposes a `/mint` endpoint:
 }
 ```
 
+**Endpoint**: `GET /baskets`
+Returns a list of all registered stablecoin baskets.
+
+**Endpoint**: `POST /baskets`
+Registers a newly created basket.
+**Request Body**:
+```json
+{
+  "name": "Australian Dollar Token",
+  "symbol": "AUDT",
+  "stablecoin": "0x...",
+  "consumer": "0x...",
+  "admin": "0x..."
+}
+```
+
 ### 2. Workflow Runner (`backend/src/workflow-runner.ts`)
 
 Handles CRE workflow execution:
@@ -207,6 +223,20 @@ curl -X POST http://localhost:3001/mint \
   }'
 ```
 
+## Dynamic Basket Registry
+
+The BSKT platform is designed to be multi-tenant. Users can create their own stablecoin baskets (e.g., AUDT, JPYT, BRZT) via the `BasketFactory`. 
+
+### The Demo Challenge
+Since contract addresses are generated dynamically on-chain, the CRE workflow needs to know WHICH contract it is minting for. 
+
+### Implementation: Registry + Dynamic Loading
+The backend maintains a local registry (`baskets.json`) that acts as a discovery service for the demo:
+
+1.  **Discovery**: Frontend calls `GET /baskets` to populate the "Select Currency" dropdown.
+2.  **Registration**: Once a user creates a new basket, the frontend calls `POST /baskets` to register it.
+3.  **Execution**: When a mint is requested, the backend loads the correct contract addresses for the selected basket before invoking the CRE.
+
 ## Frontend Integration
 
 ### Using fetch API
@@ -272,18 +302,20 @@ function MintButton() {
 
 ## Workflow Execution Flow
 
-1. **Frontend** creates a basket via `BasketFactory.createBasket()`
-2. **Frontend** parses receipt to get `stablecoinAddress` and `mintingConsumerAddress`
-3. **Frontend** calls backend `/mint` endpoint with addresses + beneficiary + amount
-4. **Backend** updates CRE workflow config files
-5. **Backend** executes workflow: `bun run main.ts`
-6. **Workflow** performs PoR check (mock in hackathon mode)
-7. **Workflow** generates DON-signed report
-8. **Workflow** calls `MintingConsumerWithACE.onReport()`
-9. **ACE** validates policies (blacklist check)
-10. **Contract** mints tokens to beneficiary
-11. **Backend** returns transaction hash to frontend
-12. **Frontend** displays success + Etherscan link
+1.  **Frontend** calls `BasketFactory.createBasket()` via the user's wallet.
+2.  **Blockchain** executes the factory logic and emits `BasketCreated`.
+3.  **Frontend** waits for the transaction receipt and extracts the `stablecoin` and `consumer` addresses.
+4.  **Frontend** calls backend `POST /baskets` to register the new stablecoin globally for the demo.
+5.  **Frontend** (or another user) selects the new stablecoin and requests a `/mint`.
+6.  **Backend** updates CRE workflow config files with the registered addresses.
+7.  **Backend** executes workflow: `bun run main.ts`.
+8.  **Workflow** performs PoR check against the Bank API.
+9.  **Workflow** generates a DON-signed cryptographic report.
+10. **Workflow** calls `MintingConsumer.onReport()`.
+11. **ACE** validates the beneficiary and amount policies.
+12. **Contract** mints the tokens.
+13. **Backend** returns the transaction hash to the frontend.
+14. **Frontend** displays success and updates the user's balance.
 
 ## Troubleshooting
 

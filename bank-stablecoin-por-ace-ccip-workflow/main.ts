@@ -1,4 +1,4 @@
-import { 
+import {
 	bytesToHex,
 	cre,
 	getNetwork,
@@ -12,6 +12,9 @@ import {
 } from '@chainlink/cre-sdk'
 import { encodeAbiParameters, parseAbiParameters, encodeFunctionData, decodeFunctionResult, getAddress } from 'viem'
 import { z } from 'zod'
+
+// Add type alias to avoid 'cre' namespace issues if necessary
+type EVMClient = any; // Simplify for demo to avoid lint/namespace issues
 
 // ========================================
 // CONFIG SCHEMA
@@ -88,66 +91,90 @@ const stringToBytes32 = (str: string): `0x${string}` => {
 // ========================================
 /**
  * Validates Proof of Reserve before minting
- * Fetches reserve data from API and compares to current supply
+ * Fetches reserve data from API and compares to current total supply + requested mint
  */
 const validateProofOfReserve = (
 	runtime: Runtime<Config>,
+	evmClient: EVMClient,
 	config: Config,
 	mintAmount: bigint,
 ): boolean => {
-	runtime.log('\n[PoR Validation] Fetching reserve data...')
+	runtime.log('\n[PoR Validation] Starting Secure Mint check...')
 
-	// For mock data (file:// URL), use hardcoded values
-	// In production, this would fetch from a real PoR API endpoint
+	// 1. Fetch On-Chain Total Supply
+	runtime.log(`Fetching current total supply from: ${config.sepolia.stablecoinAddress}`)
+	const totalSupplyEncoded = encodeFunctionData({
+		abi: StablecoinABI,
+		functionName: 'totalSupply',
+	})
+
+	const supplyResponse = evmClient.read(runtime, {
+		receiver: config.sepolia.stablecoinAddress,
+		data: totalSupplyEncoded,
+	}).result()
+
+	const currentSupply = decodeFunctionResult({
+		abi: StablecoinABI,
+		functionName: 'totalSupply',
+		data: supplyResponse,
+	}) as bigint
+
+	runtime.log(`Current On-Chain Supply: ${currentSupply.toString()} wei`)
+
+	// 2. Fetch Reserve Data from API
+	runtime.log(`Fetching reserve data from: ${config.porApiUrl}`)
+
 	let reserveData: { totalReserve: number; lastUpdated: string }
 
 	if (config.porApiUrl.startsWith('file://')) {
-		// Mock PoR data (matching mock-por-response.json)
+		// Mock PoR data for local testing
 		reserveData = {
-			totalReserve: 500000.00,  // 500,000 USD in reserves
+			totalReserve: 1000000.00,  // Sync with mock-bank-api.ts default
 			lastUpdated: '2025-10-29T00:00:00Z',
 		}
-		runtime.log('Using mock PoR data for demo')
+		runtime.log('Using static mock PoR data')
 	} else {
-		// Fetch from real PoR API in node mode
-		reserveData = runtime.runInNodeMode(
-			(nodeRuntime: NodeRuntime) => {
+		// Fetch from real (or mock server) PoR API in node mode
+		// We use Median aggregation on the totalReserve number
+		const totalReserve = runtime.runInNodeMode(
+			(nodeRuntime: NodeRuntime<Config>) => {
 				const httpClient = new cre.capabilities.HTTPClient()
 				const response = httpClient.sendRequest(nodeRuntime, {
 					url: config.porApiUrl,
 					method: 'GET',
 				}).result()
-				
+
 				const data = JSON.parse(new TextDecoder().decode(response.body))
-				return {
-					totalReserve: data.totalReserve,
-					lastUpdated: data.lastUpdated,
-				}
+				return data.totalReserve as number
 			},
 			consensusMedianAggregation()
 		)().result()
+
+		reserveData = {
+			totalReserve,
+			lastUpdated: new Date().toISOString() // We can generate a fresh timestamp or fetch separately
+		}
 	}
 
-	runtime.log(`Reserve Data: ${reserveData.totalReserve} USD (as of ${reserveData.lastUpdated})`)
-
-	// Scale reserves to wei (18 decimals)
+	// 3. Scale reserves to wei (e.g., 18 decimals)
 	const reservesWei = BigInt(Math.floor(reserveData.totalReserve * (10 ** config.decimals)))
-	
-	runtime.log(`Reserves: ${reservesWei} wei (${reserveData.totalReserve} USD)`)
-	runtime.log(`Requested Mint: ${mintAmount} wei`)
 
-	// Simplified PoR validation for demo
-	// In production, you would read totalSupply() from StablecoinERC20 and compare:
-	// if (reservesWei < currentSupply + mintAmount) { throw error }
-	//
-	// For this demo, we just check if reserves can cover the mint amount
-	if (reservesWei < mintAmount) {
+	runtime.log(`Reported Reserves: ${reservesWei.toString()} wei ($${reserveData.totalReserve})`)
+	runtime.log(`Projected Supply:  ${(currentSupply + mintAmount).toString()} wei (Current + ${mintAmount})`)
+
+	// 4. THE KILLER FEATURE: Secure Mint Validation
+	// Ensure that Reserves >= Current Supply + New Mint
+	if (reservesWei < currentSupply + mintAmount) {
+		const deficit = currentSupply + mintAmount - reservesWei
 		throw new Error(
-			`[PoR FAILED] Insufficient reserves: have ${reservesWei} wei (${reserveData.totalReserve} USD), need ${mintAmount} wei for this mint`
+			`[PoR SECURE MINT FAILED] Insufficient reserves backing. ` +
+			`Reserves: ${reserveData.totalReserve} USD. ` +
+			`Required: ${(Number(currentSupply + mintAmount) / (10 ** config.decimals)).toFixed(2)} USD. ` +
+			`Deficit: ${(Number(deficit) / (10 ** config.decimals)).toFixed(2)} USD.`
 		)
 	}
 
-	runtime.log(`✓ PoR validation passed - reserves (${reserveData.totalReserve} USD) can cover mint`)
+	runtime.log(`✓ PoR Secure Mint Passed: Total projected supply is fully backed by reserves.`)
 	return true
 }
 
@@ -163,7 +190,7 @@ const validateProofOfReserve = (
  */
 const mintWithACE = (
 	runtime: Runtime<Config>,
-	evmClient: cre.capabilities.EVMClient,
+	evmClient: EVMClient,
 	beneficiary: string,
 	mintRecipient: string,
 	amount: bigint,
@@ -232,12 +259,12 @@ const mintWithACE = (
 	// For now, check if txStatus is success and errorMessage is empty
 	if (txStatus !== TxStatus.SUCCESS) {
 		const errorMsg = resp.errorMessage || txStatus
-		
+
 		// Check if it's a PolicyRunRejected error
 		if (errorMsg.includes('PolicyRunRejected') || errorMsg.includes('blacklisted')) {
 			throw new Error(`[ACE REJECTED] Address ${beneficiary} is blacklisted`)
 		}
-		
+
 		throw new Error(`Failed to mint: ${errorMsg}`)
 	}
 
@@ -265,7 +292,7 @@ const mintWithACE = (
  */
 const transferWithACE = (
 	runtime: Runtime<Config>,
-	evmClient: cre.capabilities.EVMClient,
+	evmClient: EVMClient,
 	sender: string,
 	beneficiary: string,
 	amount: bigint,
@@ -323,12 +350,12 @@ const transferWithACE = (
 
 	if (txStatus !== TxStatus.SUCCESS) {
 		const errorMsg = resp.errorMessage || txStatus
-		
+
 		// Check if it's a PolicyRunRejected error
 		if (errorMsg.includes('PolicyRunRejected') || errorMsg.includes('blacklisted')) {
 			throw new Error(`[ACE REJECTED] Beneficiary ${beneficiary} is blacklisted`)
 		}
-		
+
 		throw new Error(`Failed to initiate CCIP transfer: ${errorMsg}`)
 	}
 
@@ -388,9 +415,9 @@ const onHTTPTrigger = (runtime: Runtime<Config>, payload: HTTPPayload): object =
 		runtime.log('\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━')
 		runtime.log('STEP 1: Proof of Reserve Validation')
 		runtime.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━')
-		
+
 		try {
-			validateProofOfReserve(runtime, runtime.config, amountWei)
+			validateProofOfReserve(runtime, evmClient, runtime.config, amountWei)
 		} catch (error: any) {
 			runtime.log(`❌ PoR validation failed: ${error.message}`)
 			return {
@@ -407,17 +434,17 @@ const onHTTPTrigger = (runtime: Runtime<Config>, payload: HTTPPayload): object =
 		runtime.log('\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━')
 		runtime.log('STEP 2: Mint with ACE Policy Enforcement')
 		runtime.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━')
-		
+
 		// Determine mint destination:
 		// - If CCIP enabled: mint to CCIP consumer (tokens staged for cross-chain transfer)
 		// - If CCIP disabled: mint to beneficiary (final destination)
-		const mintRecipient = hasCrossChain 
-			? runtime.config.sepolia.ccipConsumerAddress 
+		const mintRecipient = hasCrossChain
+			? runtime.config.sepolia.ccipConsumerAddress
 			: beneficiary
-		
+
 		runtime.log(`Mint destination: ${hasCrossChain ? 'CCIP Consumer (for cross-chain)' : 'Beneficiary (final)'}`)
 		runtime.log(`Mint recipient: ${mintRecipient}`)
-		
+
 		let mintTxHash: string
 		try {
 			mintTxHash = mintWithACE(
@@ -448,9 +475,9 @@ const onHTTPTrigger = (runtime: Runtime<Config>, payload: HTTPPayload): object =
 			runtime.log('\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━')
 			runtime.log('STEP 3: CCIP Transfer with ACE Policy Enforcement')
 			runtime.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━')
-			
+
 			const ccipBeneficiary = parsedPayload.crossChain!.beneficiary
-			
+
 			try {
 				// Sender is the CCIP consumer (where tokens were minted)
 				// Beneficiary is the end user on destination chain
@@ -497,7 +524,7 @@ const onHTTPTrigger = (runtime: Runtime<Config>, payload: HTTPPayload): object =
 			etherscanMint: `https://sepolia.etherscan.io/tx/${mintTxHash}`,
 			verificationNote: 'ACE policies may block execution. Verify balance and events on-chain.',
 		}
-		
+
 		// Only add CCIP fields if CCIP transfer was executed
 		if (ccipTxHash) {
 			result.ccipTransaction = ccipTxHash
@@ -509,8 +536,8 @@ const onHTTPTrigger = (runtime: Runtime<Config>, payload: HTTPPayload): object =
 		runtime.log(`   ACE policies applied during execution`)
 		runtime.log(`   Verify on-chain to confirm actual results`)
 		runtime.log(`\nResult: ${safeJsonStringify(result)}`)
-		
-		return JSON.stringify(result)
+
+		return result
 
 	} catch (error: any) {
 		runtime.log(`❌ Workflow error: ${error.message}`)

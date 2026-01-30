@@ -306,6 +306,7 @@ CRE Reserve Verification
 
 ### Technical Guides
 - [Integration Guide](docs/INTEGRATION_GUIDE.md)
+- [Production Architecture Considerations](docs/PRODUCTION_ARCHITECTURE.md)
 - [Quick Start](docs/QUICK_START.md)
 - [Project Explanation](docs/Explanation_notion.md)
 
