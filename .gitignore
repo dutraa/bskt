@@ -25,9 +25,10 @@ basket-contracts/lib/
 **/broadcast/
 **/cache/
 
-# Documentation (local only)
-# Documentation
-docs/chainlink/
+# Documentation (ignored as requested)
+docs/
+scripts/
+
 
 # Backend
 backend/.env
