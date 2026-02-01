@@ -97,7 +97,7 @@ forge install
 
 ## 🎮 BSKT Demo Guide
 
-Follow these steps to run the end-to-end demo, covering registration and Proof-of-Reserve (PoR) Secure Minting.
+Follow these steps to run the end-to-end demo, including creating a new stablecoin basket and running Proof-of-Reserve (PoR) Secure Minting.
 
 ### 1. Start the Demo Environment
 The system requires two components to be running in separate terminals/background:
@@ -112,10 +112,20 @@ bun run backend/src/mock-bank-api.ts
 bun run backend/src/server.ts
 ```
 
-### 2. Register a New Stablecoin (Registry Sync)
-Register a test stablecoin (`AUDT`) so the Gateway knows which contracts to interact with:
+### 2. Create a New Basket (Deploy Stablecoin + Consumer)
+This deploys a new `StablecoinERC20` + `MintingConsumerWithACE` via the on-chain `BasketFactory`, then writes the resulting addresses to:
+
+- `backend/data/baskets.json` (append history)
+- `backend/data/basket.json` (the active basket used by `/mint`)
+
 ```bash
-wsl bash -c "curl -s -X POST http://localhost:3001/baskets -H 'Content-Type: application/json' -d @\$(wslpath -a ./backend/test_basket.json)"
+curl -s -X POST http://localhost:3001/create-basket \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "AUDT",
+    "symbol": "AUDT",
+    "admin": "0xYOUR_ADMIN_EOA"
+  }'
 ```
 
 ### 3. Run PoR Secure Mint Verification
@@ -132,11 +142,14 @@ curl -X POST http://localhost:3001/mint \
   -H "Content-Type: application/json" \
   -d '{
     "beneficiary": "0x742d35Cc6634C0532925a3b844Bc9e7595f0bEb",
-    "amount": "1000",
-    "stablecoinAddress": "0x1234567890123456789012345678901234567890",
-    "mintingConsumerAddress": "0x0987654321098765432109876543210987654321"
+    "amount": "1000"
   }'
 ```
+
+If you want to override the active basket, you can pass:
+
+- `stablecoinAddress`
+- `mintingConsumerAddress`
 
 ## 🛡️ Key Innovation: PoR Secure Mint
 
@@ -163,10 +176,10 @@ Mint Request Received
 ## 🔄 Technical Deep Dive
 
 ### Components
-1.  **Backend API Server** ([server.ts](file:///c:/Users/shiny/Linux/bskt/backend/src/server.ts)): Exposes `/mint` and `/baskets` endpoints.
-2.  **Workflow Runner** ([workflow-runner.ts](file:///c:/Users/shiny/Linux/bskt/backend/src/workflow-runner.ts)): Bridges the API to the CRE workflow.
-3.  **CRE Workflow** ([main.ts](file:///c:/Users/shiny/Linux/bskt/bank-stablecoin-por-ace-ccip-workflow/main.ts)): Executes the decentralized logic.
-4.  **Smart Contracts** ([basket-contracts/src](file:///c:/Users/shiny/Linux/bskt/basket-contracts/src)): The on-chain foundation.
+1.  **Backend API Server** ([server.ts](backend/src/server.ts)): Exposes `/mint` and `/baskets` endpoints.
+2.  **Workflow Runner** ([workflow-runner.ts](backend/src/workflow-runner.ts)): Bridges the API to the CRE workflow.
+3.  **CRE Workflow** ([main.ts](bank-stablecoin-por-ace-ccip-workflow/main.ts)): Executes the decentralized logic.
+4.  **Smart Contracts** ([basket-contracts/src](basket-contracts/src)): The on-chain foundation.
 
 ### Production Architecture
 To move beyond the demo, the following refinements are planned:

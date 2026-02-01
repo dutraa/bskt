@@ -1,18 +1,10 @@
 {
-  "messageType": "MT103",
-  "transactionId": "CREBNK20251029001",
-  "sender": {
-    "name": "Alice Corp",
-    "account": "ALICE001",
-    "bankCode": "CREBNK"
-  },
+  "messageType": "MINT",
+  "transactionId": "mint-625ba08b-64a6-4874-9581-c56846d234b4",
   "beneficiary": {
-    "name": "MetaMask  Wallet",
-    "account": "0x6C17b331Bf674D6F9F5AC436FE9AfbD79E9328bb"
+    "account": "0x60105EC2b4Eb1A8a27F4090d4B05F15F33A7FBFd"
   },
   "amount": "1000",
   "currency": "USD",
-  "valueDate": "2025-10-29",
-  "bankReference": "0x434245424e4b32303235313032393030310000000000000000000000000000000",
-  "_comment": "Basic mint without CCIP transfer. Beneficiary receives tokens on Sepolia."
+  "bankReference": "ref-1769919188385"
 }

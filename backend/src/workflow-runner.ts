@@ -1,68 +1,108 @@
-import { exec } from 'child_process';
+import { exec, spawn } from 'child_process';
 import { promisify } from 'util';
 import * as fs from 'fs/promises';
 import * as path from 'path';
 
 const execAsync = promisify(exec);
 
-interface MintRequest {
-    beneficiary: string;
-    amount: string;
-    stablecoinAddress: string;
-    mintingConsumerAddress: string;
+export interface WorkflowRequest {
+    messageType: 'MINT' | 'CREATE_BASKET';
+    transactionId: string;
+    // Mint fields
+    beneficiary?: {
+        account: string;
+    };
+    amount?: string;
+    currency?: string;
+    bankReference?: string;
+    stablecoinAddress?: string;
+    mintingConsumerAddress?: string;
+    // Create fields
+    basketName?: string;
+    basketSymbol?: string;
+    basketAdmin?: string;
 }
 
 interface WorkflowResult {
     success: boolean;
-    mintTx?: string;
+    txHash?: string;
     error?: string;
+    output?: string;
 }
 
-const WORKFLOW_DIR = process.env.WORKFLOW_DIR || '../bank-stablecoin-por-ace-ccip-workflow';
+const getWorkflowDir = () => {
+    // Current file is in src/, project root is three levels up
+    const relativeToSrc = path.resolve(__dirname, '../../bank-stablecoin-por-ace-ccip-workflow');
+    const relativeToRoot = path.resolve(process.cwd(), 'bank-stablecoin-por-ace-ccip-workflow');
+    const relativeToBackend = path.resolve(process.cwd(), '../bank-stablecoin-por-ace-ccip-workflow');
+
+    try {
+        if (require('fs').existsSync(relativeToSrc)) return relativeToSrc;
+        if (require('fs').existsSync(relativeToRoot)) return relativeToRoot;
+        if (require('fs').existsSync(relativeToBackend)) return relativeToBackend;
+    } catch (e) { }
+
+    return relativeToSrc; // Fallback
+};
+
+const WORKFLOW_DIR = process.env.WORKFLOW_DIR
+    ? path.isAbsolute(process.env.WORKFLOW_DIR)
+        ? process.env.WORKFLOW_DIR
+        : path.resolve(process.cwd(), process.env.WORKFLOW_DIR)
+    : getWorkflowDir();
 
 /**
- * Updates the workflow config.json with the provided addresses
+ * Updates the workflow config.json with the provided metadata if needed
  */
-async function updateWorkflowConfig(request: MintRequest): Promise<void> {
+async function updateWorkflowConfig(request: WorkflowRequest): Promise<void> {
     const configPath = path.join(WORKFLOW_DIR, 'config.json');
 
     try {
-        // Read existing config
         const configContent = await fs.readFile(configPath, 'utf-8');
         const config = JSON.parse(configContent);
 
-        // Update addresses
-        config.stablecoinAddress = request.stablecoinAddress;
-        config.mintingConsumerAddress = request.mintingConsumerAddress;
+        let updated = false;
 
-        // Write back to file
-        await fs.writeFile(configPath, JSON.stringify(config, null, 2));
-        console.log(`[CONFIG] Updated workflow config with new addresses`);
+        if (request.stablecoinAddress) {
+            config.stablecoinAddress = request.stablecoinAddress;
+            updated = true;
+        }
+        if (request.mintingConsumerAddress) {
+            config.mintingConsumerAddress = request.mintingConsumerAddress;
+            updated = true;
+        }
+
+        if (updated) {
+            await fs.writeFile(configPath, JSON.stringify(config, null, 2));
+            console.log(`[CONFIG] Updated workflow config with addresses`);
+        }
     } catch (error) {
         throw new Error(`Failed to update workflow config: ${error instanceof Error ? error.message : 'Unknown error'}`);
     }
 }
 
 /**
- * Updates the HTTP trigger payload with beneficiary and amount
+ * Updates the HTTP trigger payload
  */
-async function updateTriggerPayload(request: MintRequest): Promise<void> {
+async function updateTriggerPayload(request: WorkflowRequest): Promise<void> {
     const payloadPath = path.join(WORKFLOW_DIR, 'http_trigger_payload.json');
 
     try {
-        // Read existing payload
-        const payloadContent = await fs.readFile(payloadPath, 'utf-8');
-        const payload = JSON.parse(payloadContent);
+        // We'll just overwrite the whole payload for simplicity and reliability
+        const payload = {
+            messageType: request.messageType,
+            transactionId: request.transactionId,
+            beneficiary: request.beneficiary,
+            amount: request.amount,
+            currency: request.currency || 'USD',
+            bankReference: request.bankReference || `ref-${Date.now()}`,
+            basketName: request.basketName,
+            basketSymbol: request.basketSymbol,
+            basketAdmin: request.basketAdmin
+        };
 
-        // Update beneficiary and amount
-        if (payload.bankMessage) {
-            payload.bankMessage.beneficiary = request.beneficiary;
-            payload.bankMessage.amount = request.amount;
-        }
-
-        // Write back to file
         await fs.writeFile(payloadPath, JSON.stringify(payload, null, 2));
-        console.log(`[PAYLOAD] Updated trigger payload with beneficiary and amount`);
+        console.log(`[PAYLOAD] Updated trigger payload for ${request.messageType}`);
     } catch (error) {
         throw new Error(`Failed to update trigger payload: ${error instanceof Error ? error.message : 'Unknown error'}`);
     }
@@ -71,58 +111,89 @@ async function updateTriggerPayload(request: MintRequest): Promise<void> {
 /**
  * Executes the CRE workflow and extracts the transaction hash
  */
-async function executeWorkflow(): Promise<string> {
+async function executeWorkflow(): Promise<{ txHash: string, output: string }> {
     try {
         console.log(`[WORKFLOW] Executing CRE workflow in ${WORKFLOW_DIR}`);
 
-        // Change to workflow directory and run the workflow
-        // We use 'bun' from the environment PATH or a configurable BUN_PATH
         const bunCmd = process.env.BUN_PATH || 'bun';
-        const command = `cd ${WORKFLOW_DIR} && ${bunCmd} run main.ts`;
 
-        const { stdout, stderr } = await execAsync(command, {
-            maxBuffer: 1024 * 1024 * 10 // 10MB buffer
+        return new Promise((resolve, reject) => {
+            console.log(`[WORKFLOW] Running: ${bunCmd} run main.ts`);
+            const child = spawn(bunCmd, ['run', 'main.ts'], {
+                cwd: WORKFLOW_DIR,
+                env: process.env
+            });
+
+            let stdout = '';
+            let stderr = '';
+
+            child.stdout.on('data', (data: Buffer) => {
+                const chunk = data.toString();
+                stdout += chunk;
+                process.stdout.write(`[WORKFLOW STDOUT] ${chunk}`);
+            });
+
+            child.stderr.on('data', (data: Buffer) => {
+                const chunk = data.toString();
+                stderr += chunk;
+                process.stderr.write(`[WORKFLOW STDERR] ${chunk}`);
+            });
+
+            child.on('close', (code: number) => {
+                if (code !== 0) {
+                    reject(new Error(`Workflow process exited with code ${code}\n${stderr}`));
+                    return;
+                }
+
+                // Extract transaction hash from output
+                // Support both CREATE_BASKET and MINT flow prefixes
+                let txHash = '';
+                const txMatch = stdout.match(/(?:CREATE_BASKET_TX|Mint report delivered|CCIP report delivered):\s*(0x[a-fA-F0-9]{64})/i);
+                if (txMatch) {
+                    txHash = txMatch[1];
+                }
+
+                if (!txHash) {
+                    console.error(`[WORKFLOW] Full stdout for debugging:\n${stdout}`);
+                    reject(new Error(`Transaction hash not found in workflow output. Output: ${stdout.slice(0, 5000)}...`));
+                    return;
+                }
+
+                resolve({ txHash, output: stdout });
+            });
+
+            child.on('error', (err: Error) => {
+                reject(err);
+            });
         });
-
-        console.log(`[WORKFLOW] Output: ${stdout}`);
-        if (stderr) {
-            console.warn(`[WORKFLOW] Stderr: ${stderr}`);
-        }
-
-        // Extract transaction hash from output
-        // This regex pattern may need adjustment based on actual output format
-        const txHashMatch = stdout.match(/0x[a-fA-F0-9]{64}/);
-
-        if (txHashMatch) {
-            return txHashMatch[0];
-        } else {
-            throw new Error('Transaction hash not found in workflow output');
-        }
     } catch (error) {
-        throw new Error(`Workflow execution failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
+        throw new Error(`Workflow execution setup failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
     }
 }
 
 /**
- * Main function to run the workflow with the provided mint request
+ * Main entry point to run the workflow
  */
-export async function runWorkflow(request: MintRequest): Promise<WorkflowResult> {
+export async function runWorkflow(request: WorkflowRequest): Promise<WorkflowResult> {
     try {
-        // Step 1: Update workflow config with addresses
+        console.log(`[RUNNER] Starting ${request.messageType} flow...`);
+
+        // Step 1: Update workflow config (mostly for MINT to point to correct contracts)
         await updateWorkflowConfig(request);
 
-        // Step 2: Update trigger payload with beneficiary and amount
+        // Step 2: Update trigger payload
         await updateTriggerPayload(request);
 
         // Step 3: Execute the workflow
-        const mintTx = await executeWorkflow();
+        const { txHash, output } = await executeWorkflow();
 
         return {
             success: true,
-            mintTx
+            txHash,
+            output
         };
     } catch (error) {
-        console.error('[WORKFLOW ERROR]', error);
+        console.error('[RUNNER ERROR]', error);
         return {
             success: false,
             error: error instanceof Error ? error.message : 'Unknown error occurred'

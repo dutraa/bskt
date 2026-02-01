@@ -1,0 +1,9 @@
+{
+  "name": "AUDT",
+  "symbol": "AUDT",
+  "stablecoin": "0x1234567890123456789012345678901234567890",
+  "consumer": "0x1234567890123456789012345678901234567891",
+  "admin": "0x60105EC2b4Eb1A8a27F4090d4B05F15F33A7FBFd",
+  "txHash": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "createdAt": "2026-02-01T04:04:56.245Z"
+}

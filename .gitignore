@@ -20,6 +20,10 @@ tmp.*
 
 # basket-contracts deps
 basket-contracts/lib/
+basket-contracts/.env
+
+# bank-stablecoin-por-ace-ccip-workflow deps
+bank-stablecoin-por-ace-ccip-workflow/.env
 
 # Foundry (all nested)
 **/broadcast/

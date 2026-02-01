@@ -5,6 +5,7 @@
     "ccipConsumerAddress": "0xFa031de805af3a9A72D37f57a01634ADF4a61cD5",
     "policyEngineAddress": "0x697B79dFdbe5eD6f9d877bBeFac04d7A28be5CA1",
     "blacklistPolicyAddress": "0xA5Db8159CD4084570FD248A7ec8457B3E348c3A6",
+    "basketFactoryAddress": "0x2c2216d41929241143eb138e4ff0cf49a742767a",
     "chainSelector": "16015286601757825753"
   },
   "fuji": {
@@ -13,6 +14,6 @@
   },
   "porApiUrl": "http://localhost:3002/reserves",
   "decimals": 18,
-  "stablecoinAddress": "0xd7b6f62a6a01bd7626c8cf6252ed717243c8f2f8",
-  "mintingConsumerAddress": "0xf07ed51bc946bf21bf0f366f9e12cf3b2931166a"
+  "stablecoinAddress": "0x1234567890123456789012345678901234567890",
+  "mintingConsumerAddress": "0x1234567890123456789012345678901234567891"
 }

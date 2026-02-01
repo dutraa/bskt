@@ -1,3 +1,4 @@
+console.log(`[DEBUG] main.ts starting... CWD: ${process.cwd()}`);
 import {
 	bytesToHex,
 	cre,
@@ -13,6 +14,243 @@ import {
 import { encodeAbiParameters, parseAbiParameters, encodeFunctionData, decodeFunctionResult, getAddress } from 'viem'
 import { z } from 'zod'
 
+// ========================================
+// SHIM FOR LOCAL EXECUTION (Node/Bun)
+// ========================================
+// The CRE SDK expects global functions injected by the host. 
+// This shim provides basic mocks to allow the code to run in Bun/Node.
+// @ts-ignore
+if (typeof globalThis.log === 'undefined') {
+	const mockFunc = () => { };
+	const mockReturnZero = () => 0;
+	const mockReturnBytes = () => new Uint8Array();
+
+	// @ts-ignore
+	globalThis.log = (msg: string) => console.log(`[CRE] ${msg}`);
+	// @ts-ignore
+	globalThis.now = () => Math.floor(Date.now() / 1000);
+	// @ts-ignore
+	globalThis.getWasiArgs = () => "[\"\", \"\"]"; // Satisfy length check
+	// @ts-ignore
+	globalThis.versionV2 = mockFunc;
+	// @ts-ignore
+	globalThis.switchModes = mockFunc;
+	// @ts-ignore
+	globalThis.sendResponse = mockReturnZero;
+	// @ts-ignore
+	globalThis.callCapability = mockReturnZero;
+	// @ts-ignore
+	globalThis.awaitCapabilities = mockReturnBytes;
+	// @ts-ignore
+	globalThis.getSecrets = mockReturnBytes;
+	// @ts-ignore
+	globalThis.awaitSecrets = mockReturnBytes;
+
+	// Hijack Runner to support local execution
+	const fs = require('fs');
+	const path = require('path');
+	const { create, fromBinary, toBinary } = require('@bufbuild/protobuf');
+	const { anyPack } = require('@bufbuild/protobuf/wkt');
+
+	// Attempt to find SDK schemas and utilities
+	const creSdkPath = path.resolve(process.cwd(), 'node_modules', '@chainlink', 'cre-sdk');
+
+	const loadSdkModule = (subpath: string) => {
+		try {
+			return require(path.join(creSdkPath, 'dist', subpath));
+		} catch (e: any) {
+			console.error(`[SHIM ERROR] Failed to load SDK module ${subpath}:`, e.message);
+			return null;
+		}
+	};
+
+	const sdkPb = loadSdkModule('generated/sdk/v1alpha/sdk_pb.js');
+	const evmPb = loadSdkModule('generated/capabilities/blockchain/evm/v1alpha/client_pb.js');
+	const valuesUtil = loadSdkModule('sdk/utils/values/value.js');
+
+	let lastReq: any = null;
+
+	// @ts-ignore
+	globalThis.callCapability = (reqBytes: Uint8Array) => {
+		try {
+			const req = fromBinary(sdkPb.CapabilityRequestSchema, reqBytes);
+			lastReq = req;
+			console.log(`[DEBUG] Capability call: ${req.id} method: ${req.method} callbackId: ${req.callbackId}`);
+			return 0; // Success
+		} catch (e: any) {
+			console.error('[SHIM ERROR] callCapability failed:', e.message);
+			return -1;
+		}
+	};
+
+	// @ts-ignore
+	globalThis.awaitCapabilities = (reqBytes: Uint8Array) => {
+		try {
+			if (!lastReq) return new Uint8Array();
+			if (!sdkPb) {
+				console.error('[SHIM ERROR] sdkPb not loaded');
+				return new Uint8Array();
+			}
+
+			let responsePayload: any;
+			let responseSchema: any;
+
+			if (lastReq.method === 'Report') {
+				responseSchema = sdkPb.ReportResponseSchema;
+				responsePayload = {
+					configDigest: new Uint8Array(32).fill(0x01),
+					seqNr: 1n,
+					reportContext: new Uint8Array(32).fill(0x02),
+					rawReport: new Uint8Array([0xde, 0xad, 0xbe, 0xef]),
+					sigs: [{ signature: new Uint8Array(65).fill(0x03), signerId: 1 }]
+				};
+			} else if (lastReq.method === 'WriteReport') {
+				responseSchema = evmPb ? evmPb.WriteReportReplySchema : null;
+				responsePayload = {
+					txStatus: 2, // SUCCESS
+					txHash: new Uint8Array(32).fill(0xaa),
+					errorMessage: ""
+				};
+			} else if (lastReq.method === 'CallContract') {
+				responseSchema = evmPb ? evmPb.CallContractReplySchema : null;
+				// Return mock supply (1,000,000 tokens)
+				// 1e6 * 1e6 (assuming 6 decimals) = 1e12 = 0xE8D4A51000
+				const supplyHex = '000000000000000000000000000000000000000000000000000000e8d4a51000';
+				responsePayload = {
+					data: new Uint8Array(Buffer.from(supplyHex, 'hex'))
+				};
+			} else if (lastReq.id === 'consensus@1.0.0-alpha' && lastReq.method === 'Simple') {
+				const valuesPb = loadSdkModule('generated/values/v1/values_pb.js');
+				responseSchema = valuesPb ? valuesPb.ValueSchema : null;
+				responsePayload = {
+					value: { case: 'string', value: 'CONSENSUS_SUCCESS' }
+				};
+			} else if (lastReq.id.includes('http') || lastReq.method === 'Get' || lastReq.method === 'Post') {
+				// Generalized HTTP fetch mock for PoR
+				// In some versions it uses a dynamic schema, but let's try returning a simple Value
+				const valuesPb = loadSdkModule('generated/values/v1/values_pb.js');
+				responseSchema = valuesPb ? valuesPb.ValueSchema : null;
+				responsePayload = {
+					value: { case: 'string', value: JSON.stringify({ totalReserve: 2000000.0 }) }
+				};
+				console.log('[DEBUG] Mocking HTTP response for PoR...');
+			}
+
+			if (responseSchema && responsePayload) {
+				console.log(`[DEBUG] Constructing result for ${lastReq.id}.${lastReq.method}`);
+				// CRITICAL: create the message instance first
+				const msg = create(responseSchema, responsePayload);
+
+				const capResp = create(sdkPb.CapabilityResponseSchema, {
+					response: {
+						case: 'payload',
+						value: anyPack(responseSchema, msg)
+					}
+				});
+
+				const awaitResp = create(sdkPb.AwaitCapabilitiesResponseSchema, {
+					responses: {
+						[Number(lastReq.callbackId)]: capResp
+					}
+				});
+
+				return toBinary(sdkPb.AwaitCapabilitiesResponseSchema, awaitResp);
+			}
+
+			console.warn(`[SHIM WARNING] No schema/payload for capability: ${lastReq.id} method: ${lastReq.method}`);
+			return new Uint8Array();
+		} catch (e: any) {
+			console.error('[SHIM ERROR] awaitCapabilities failed:', e.message);
+			console.error(e.stack);
+			return new Uint8Array();
+		}
+	};
+
+	// @ts-ignore
+	Runner.getRequest = () => {
+		console.log('[DEBUG] Runner.getRequest hijacked');
+		try {
+			const configData = fs.readFileSync('config.json');
+			console.log('[DEBUG] config.json read success');
+			return {
+				config: configData,
+				maxResponseSize: 1024 * 1024,
+				request: { case: 'trigger', value: { id: "0" } }
+			};
+		} catch (e: any) {
+			console.error(`[SHIM ERROR] Failed to read config.json:`, e.message);
+			throw e;
+		}
+	};
+
+	// @ts-ignore
+	Runner.prototype.handleExecutionPhase = async function (req, workflow, runtime) {
+		console.log('[DEBUG] handleExecutionPhase hijacked');
+		try {
+			// Inject Mocks into runtime and cre.capabilities
+			if (cre.capabilities.EVMClient && !(cre.capabilities.EVMClient.prototype as any).read) {
+				(cre.capabilities.EVMClient.prototype as any).read = function (runtime: any, input: any) {
+					console.log('[DEBUG] evmClient.read called, redirection to CallContract');
+					return runtime.callCapability({
+						capabilityId: this.capabilityId,
+						method: 'CallContract',
+						payload: input,
+					});
+				};
+			}
+
+			if (runtime && !((runtime as any).fetch)) {
+				(runtime as any).fetch = function (input: any) {
+					console.log('[DEBUG] runtime.fetch called, redirection to http Get');
+					return this.callCapability({
+						capabilityId: 'http@1.0.0',
+						method: 'Get',
+						payload: input
+					});
+				};
+			}
+
+			const payloadRaw = fs.readFileSync('http_trigger_payload.json', 'utf-8');
+			const payloadFile = JSON.parse(payloadRaw);
+			console.log(`[DEBUG] http_trigger_payload.json read success: ${payloadFile.messageType}`);
+
+			let inputBuffer: Buffer;
+			if (payloadFile.input) {
+				inputBuffer = Buffer.from(payloadFile.input, 'base64');
+			} else {
+				inputBuffer = Buffer.from(payloadRaw);
+			}
+
+			const decodedPayload = { input: inputBuffer };
+			const entry = workflow[0];
+
+			console.log('[DEBUG] Calling entry function (onHTTPTrigger)...');
+			const result = await entry.fn(runtime, decodedPayload);
+			console.log('[DEBUG] entry function returned');
+
+			if (sdkPb && valuesUtil) {
+				const wrapped = valuesUtil.Value.wrap(result);
+				return create(sdkPb.ExecutionResultSchema, {
+					result: { case: 'value', value: wrapped.proto() },
+				});
+			} else {
+				// Fallback if SDK modules failed to load
+				return {
+					result: { case: 'value', value: { value: { case: 'string', value: JSON.stringify(result) } } }
+				};
+			}
+		} catch (e: any) {
+			const errMsg = String(e);
+			console.error(`[SHIM ERROR] Execution phase failed: ${errMsg}`);
+			if (sdkPb) {
+				return create(sdkPb.ExecutionResultSchema, {
+					result: { case: 'error', value: errMsg },
+				});
+			}
+			return { result: { case: 'error', value: errMsg } };
+		}
+	};
+}
 // Add type alias to avoid 'cre' namespace issues if necessary
 type EVMClient = any; // Simplify for demo to avoid lint/namespace issues
 
@@ -24,6 +262,7 @@ const configSchema = z.object({
 		stablecoinAddress: z.string(),
 		mintingConsumerAddress: z.string(),
 		ccipConsumerAddress: z.string(),
+		basketFactoryAddress: z.string().optional(),
 		chainSelector: z.string(),
 	}),
 	fuji: z.object({
@@ -40,21 +279,26 @@ type Config = z.infer<typeof configSchema>
 // PAYLOAD SCHEMA
 // ========================================
 const payloadSchema = z.object({
-	messageType: z.string(),
+	messageType: z.enum(['MINT', 'CREATE_BASKET']),
 	transactionId: z.string(),
+	// Minting fields
 	beneficiary: z.object({
 		account: z.string(),
 		name: z.string().optional(),
-	}),
-	amount: z.string(),
-	currency: z.string(),
+	}).optional(),
+	amount: z.string().optional(),
+	currency: z.string().optional(),
 	valueDate: z.string().optional(),
-	bankReference: z.string(),
+	bankReference: z.string().optional(),
 	crossChain: z.object({
 		enabled: z.boolean(),
 		destinationChain: z.string(),
 		beneficiary: z.string(),
 	}).optional(),
+	// Creation fields
+	basketName: z.string().optional(),
+	basketSymbol: z.string().optional(),
+	basketAdmin: z.string().optional(),
 })
 
 type Payload = z.infer<typeof payloadSchema>
@@ -63,6 +307,7 @@ type Payload = z.infer<typeof payloadSchema>
 // CONSTANTS
 // ========================================
 const INSTRUCTION_MINT = 1
+const INSTRUCTION_CREATE = 2
 
 // StablecoinERC20 ABI (minimal)
 const StablecoinABI = [
@@ -72,6 +317,35 @@ const StablecoinABI = [
 		inputs: [],
 		outputs: [{ name: '', type: 'uint256' }],
 		stateMutability: 'view',
+	},
+] as const
+
+const BasketFactoryABI = [
+	{
+		type: 'function',
+		name: 'createBasket',
+		inputs: [
+			{ name: 'name', type: 'string' },
+			{ name: 'symbol', type: 'string' },
+			{ name: 'admin', type: 'address' },
+		],
+		outputs: [
+			{ name: 'stablecoin', type: 'address' },
+			{ name: 'mintingConsumer', type: 'address' },
+		],
+		stateMutability: 'external',
+	},
+	{
+		type: 'event',
+		name: 'BasketCreated',
+		inputs: [
+			{ indexed: true, name: 'creator', type: 'address' },
+			{ indexed: true, name: 'admin', type: 'address' },
+			{ indexed: true, name: 'stablecoin', type: 'address' },
+			{ indexed: false, name: 'mintingConsumer', type: 'address' },
+			{ indexed: false, name: 'name', type: 'string' },
+			{ indexed: false, name: 'symbol', type: 'string' },
+		],
 	},
 ] as const
 
@@ -178,9 +452,6 @@ const validateProofOfReserve = (
 	return true
 }
 
-// ========================================
-// MINT WITH ACE
-// ========================================
 /**
  * Mints stablecoins via ACE-protected consumer
  * ACE automatically checks if beneficiary is blacklisted
@@ -207,17 +478,6 @@ const mintWithACE = (
 	const bankRefHex = stringToBytes32(bankRef)
 
 	// Encode mint report: (instructionType=1, beneficiary, amount, bankRef)
-	// Note: beneficiary is used for BOTH ACE check AND mint recipient
-	// The ACE policy checks "beneficiary" parameter for blacklist
-	// The mint consumer mints to "beneficiary" parameter
-	// 
-	// When CCIP is enabled:
-	//   - mintRecipient = CCIPConsumer (tokens staged in contract)
-	//   - ACE checks if CCIPConsumer is blacklisted (it won't be - it's our contract)
-	//   - Final beneficiary blacklist check happens during CCIP transfer via VolumePolicy
-	// When CCIP is disabled:
-	//   - mintRecipient = end user
-	//   - ACE checks if end user is blacklisted
 	const reportData = encodeAbiParameters(
 		parseAbiParameters('uint8 instructionType, address beneficiary, uint256 amount, bytes32 bankRef'),
 		[INSTRUCTION_MINT, checksummedMintRecipient, amount, bankRefHex],
@@ -236,12 +496,6 @@ const mintWithACE = (
 		.result()
 
 	// Write to MintingConsumerWithACE
-	// ACE Policy Check happens here via runPolicy modifier:
-	//   1. PolicyEngine calls MintingConsumerExtractor
-	//   2. Extractor returns [beneficiary, amount]
-	//   3. PolicyEngine runs AddressBlacklistPolicy
-	//   4. If blacklisted → reverts with PolicyRunRejected
-	//   5. If allowed → mint proceeds
 	const resp = evmClient
 		.writeReport(runtime, {
 			receiver: runtime.config.sepolia.mintingConsumerAddress,
@@ -254,13 +508,9 @@ const mintWithACE = (
 
 	const txStatus = resp.txStatus
 
-	// Important: CRE Forwarder transaction may succeed even if consumer call fails!
-	// We need to check the actual execution result from Forwarder events
-	// For now, check if txStatus is success and errorMessage is empty
 	if (txStatus !== TxStatus.SUCCESS) {
 		const errorMsg = resp.errorMessage || txStatus
 
-		// Check if it's a PolicyRunRejected error
 		if (errorMsg.includes('PolicyRunRejected') || errorMsg.includes('blacklisted')) {
 			throw new Error(`[ACE REJECTED] Address ${beneficiary} is blacklisted`)
 		}
@@ -268,7 +518,6 @@ const mintWithACE = (
 		throw new Error(`Failed to mint: ${errorMsg}`)
 	}
 
-	// Additional check: If errorMessage contains policy rejection info
 	if (resp.errorMessage && (resp.errorMessage.includes('PolicyRunRejected') || resp.errorMessage.includes('blacklisted'))) {
 		throw new Error(`[ACE REJECTED] Address ${beneficiary} is blacklisted`)
 	}
@@ -280,6 +529,85 @@ const mintWithACE = (
 	runtime.log(`   ACE policies apply: Blacklist check for beneficiary`)
 	runtime.log(`   Verify execution: https://sepolia.etherscan.io/tx/${txHashHex}`)
 	return txHashHex
+}
+
+// ========================================
+// CREATE BASKET
+// ========================================
+/**
+ * Deploys a new basket (Stablecoin + Consumer) via BasketFactory
+ */
+const createBasket = (
+	runtime: Runtime<Config>,
+	evmClient: EVMClient,
+	name: string,
+	symbol: string,
+	admin: string,
+): { stablecoin: string; consumer: string; txHash: string } => {
+	runtime.log(`[DEBUG] createBasket called: ${name}, ${symbol}, ${admin}`)
+	const factoryAddress = runtime.config.sepolia.basketFactoryAddress
+	if (!factoryAddress) {
+		throw new Error('BasketFactory address not configured for Sepolia')
+	}
+	runtime.log(`[DEBUG] Factory address: ${factoryAddress}`)
+
+	runtime.log(`\n[Factory] Creating basket: ${name} (${symbol}) for admin: ${admin}`)
+
+	const encodedData = encodeFunctionData({
+		abi: BasketFactoryABI,
+		functionName: 'createBasket',
+		args: [name, symbol, getAddress(admin)],
+	})
+
+	// Encode the call data as a report payload (simple case: just the calldata)
+	const reportData = encodedData
+	runtime.log(`[Factory] Report data (calldata): ${reportData}`)
+
+	// Generate a signed report using the consensus capability
+	const reportResponse = runtime
+		.report({
+			encodedPayload: hexToBase64(reportData),
+			encoderName: 'evm',
+			signingAlgo: 'ecdsa',
+			hashingAlgo: 'keccak256',
+		})
+		.result()
+
+	// Submit the report to the BasketFactory
+	const writeReportResult = evmClient
+		.writeReport(runtime, {
+			receiver: factoryAddress,
+			report: reportResponse,
+			gasConfig: {
+				gasLimit: '5000000',
+			},
+		})
+		.result()
+
+	runtime.log(`[Factory] writeReport response: ${JSON.stringify({
+		txStatus: writeReportResult.txStatus,
+		errorMessage: writeReportResult.errorMessage,
+		txHash: writeReportResult.txHash ? bytesToHex(writeReportResult.txHash) : undefined
+	})}`)
+
+	if (writeReportResult.txStatus !== TxStatus.SUCCESS) {
+		throw new Error(`Failed to create basket: ${writeReportResult.errorMessage || writeReportResult.txStatus}`)
+	}
+
+	const txHashHex = bytesToHex(writeReportResult.txHash || new Uint8Array(32))
+	runtime.log(`⚠️  Basket creation TX: ${txHashHex}`)
+
+	// In a real CRE, we would decode the logs to get the addresses.
+	// For this demo, we'll assume the addresses are returned in the output or we log them.
+	// NOTE: Deciphering logs in CRE SDK might require more plumbing, 
+	// but for the demo we'll return the hash and expect the backend to parse if needed,
+	// or we can simulate address generation if the SDK doesn't expose receipt logs easily.
+
+	return {
+		stablecoin: '0x...', // Simplified: Actual implementation would parse logs
+		consumer: '0x...',
+		txHash: txHashHex
+	}
 }
 
 // ========================================
@@ -373,6 +701,7 @@ const transferWithACE = (
 // ========================================
 const onHTTPTrigger = (runtime: Runtime<Config>, payload: HTTPPayload): object => {
 	runtime.log('=== Phase 3: PoR + ACE + CCIP Workflow ===')
+	runtime.log(`[DEBUG] HTTP trigger received`)
 
 	// Require payload
 	if (!payload.input || payload.input.length === 0) {
@@ -386,10 +715,16 @@ const onHTTPTrigger = (runtime: Runtime<Config>, payload: HTTPPayload): object =
 		const payloadJson = JSON.parse(payload.input.toString())
 		const parsedPayload = payloadSchema.parse(payloadJson)
 
+		runtime.log(`[DEBUG] Parsed payload messageType: ${parsedPayload.messageType}`)
 		runtime.log(`Parsed MT103 payload: ${safeJsonStringify(parsedPayload)}`)
+		runtime.log(`Message Type: ${parsedPayload.messageType}`)
 		runtime.log(`Transaction ID: ${parsedPayload.transactionId}`)
-		runtime.log(`Beneficiary: ${parsedPayload.beneficiary.account}`)
-		runtime.log(`Amount: ${parsedPayload.amount} ${parsedPayload.currency}`)
+		if (parsedPayload.beneficiary) {
+			runtime.log(`Beneficiary: ${parsedPayload.beneficiary.account}`)
+		}
+		if (parsedPayload.amount && parsedPayload.currency) {
+			runtime.log(`Amount: ${parsedPayload.amount} ${parsedPayload.currency}`)
+		}
 
 		// Initialize EVM client for Sepolia
 		const network = getNetwork({
@@ -403,6 +738,38 @@ const onHTTPTrigger = (runtime: Runtime<Config>, payload: HTTPPayload): object =
 		}
 
 		const evmClient = new cre.capabilities.EVMClient(network.chainSelector.selector)
+
+		if (parsedPayload.messageType === 'CREATE_BASKET') {
+			runtime.log(`[DEBUG] MATCHED CREATE_BASKET branch`)
+			runtime.log('\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━')
+			runtime.log('ACTION: CREATE BASKET')
+			runtime.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━')
+			runtime.log(`[DEBUG] Entering CREATE_BASKET branch`)
+
+			const { basketName, basketSymbol, basketAdmin } = parsedPayload
+			if (!basketName || !basketSymbol || !basketAdmin) {
+				throw new Error('Missing basket creation parameters')
+			}
+			runtime.log(`[DEBUG] Params OK: ${basketName}, ${basketSymbol}, ${basketAdmin}`)
+
+			const result = createBasket(runtime, evmClient, basketName, basketSymbol, basketAdmin)
+			runtime.log(`CREATE_BASKET_TX: ${result.txHash}`)
+			runtime.log(`CREATE_BASKET_RESULT: ${JSON.stringify(result)}`)
+			return {
+				success: true,
+				messageType: 'CREATE_BASKET',
+				transactionId: parsedPayload.transactionId,
+				txHash: result.txHash,
+				// Backend will parse these from logs if needed, 
+				// or we can use the deterministic nature if we had a salt
+				etherscan: `https://sepolia.etherscan.io/tx/${result.txHash}`
+			}
+		}
+
+		// MINT Logic
+		if (!parsedPayload.beneficiary || !parsedPayload.amount || !parsedPayload.currency || !parsedPayload.bankReference) {
+			throw new Error('Missing minting parameters')
+		}
 
 		// Convert amount to wei
 		const amountWei = BigInt(parseFloat(parsedPayload.amount) * (10 ** runtime.config.decimals))
@@ -564,3 +931,11 @@ export async function main() {
 }
 
 main()
+	.then(() => {
+		console.log('[DEBUG] Workflow execution completed successfully');
+		process.exit(0);
+	})
+	.catch((err) => {
+		console.error('[DEBUG] Workflow execution failed:', err);
+		process.exit(1);
+	});

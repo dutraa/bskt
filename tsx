@@ -1,1 +1,0 @@
-[?1049h[22;0;0t[1;23r(B[m[4l[?7h[H[2JEvery 2.0s: src/server.ts[1;62HShiro-PC: Wed Jan 28 22:11:20 2026[3;1Hsh: 1: src/server.ts: not found[23;95H[23;1H[?1049l[23;0;0t[?1l>
