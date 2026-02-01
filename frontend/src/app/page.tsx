@@ -146,12 +146,12 @@ export default function Home() {
               <div>
                 <p className="text-sm text-slate-400 mb-1">BasketFactory</p>
                 <a
-                  href="https://sepolia.etherscan.io/address/0xc0e78ddcc5ecc590e77a985bca82122d52b0e092"
+                  href="https://sepolia.etherscan.io/address/0x7419818Baf1373B5a75ab265C00c2ea0895Bd590"
                   target="_blank"
                   rel="noopener noreferrer"
                   className="address-display text-indigo-300 hover:text-indigo-200 block"
                 >
-                  0xc0e78ddcc5ecc590e77a985bca82122d52b0e092
+                  0x7419818Baf1373B5a75ab265C00c2ea0895Bd590
                 </a>
               </div>
               <div>

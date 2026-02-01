@@ -1,6 +1,6 @@
 // Contract addresses for Sepolia testnet
 export const BASKET_FACTORY_ADDRESS = (process.env.NEXT_PUBLIC_BASKET_FACTORY_ADDRESS ||
-  "0xc0e78ddcc5ecc590e77a985bca82122d52b0e092") as `0x${string}`;
+  "0x7419818Baf1373B5a75ab265C00c2ea0895Bd590") as `0x${string}`;
 
 export const POLICY_ENGINE_ADDRESS = (process.env.NEXT_PUBLIC_POLICY_ENGINE_ADDRESS ||
   "0x697B79dFdbe5eD6f9d877bBeFac04d7A28be5CA1") as `0x${string}`;
