@@ -1,12 +1,12 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import {
   useWriteContract,
   useWaitForTransactionReceipt,
   useAccount,
 } from "wagmi";
-import { decodeEventLog } from "viem";
+import { decodeEventLog, Log } from "viem";
 import { BasketFactoryABI, BASKET_FACTORY_ADDRESS } from "@/config/contracts";
 
 export interface BasketCreatedResult {
@@ -15,6 +15,11 @@ export interface BasketCreatedResult {
   name: string;
   symbol: string;
   txHash: `0x${string}`;
+}
+
+interface TransactionReceipt {
+  transactionHash: `0x${string}`;
+  logs: Log[];
 }
 
 export function useCreateBasket() {
@@ -39,10 +44,10 @@ export function useCreateBasket() {
   });
 
   // Parse the BasketCreated event from the receipt
-  const parseReceipt = (receipt: typeof receiptError extends Error ? never : NonNullable<typeof receipt>) => {
-    if (!receipt) return null;
+  const parseReceipt = (txReceipt: TransactionReceipt): BasketCreatedResult | null => {
+    if (!txReceipt) return null;
 
-    for (const log of receipt.logs) {
+    for (const log of txReceipt.logs) {
       try {
         const decoded = decodeEventLog({
           abi: BasketFactoryABI,
@@ -65,24 +70,8 @@ export function useCreateBasket() {
             mintingConsumerAddress: args.mintingConsumer,
             name: args.name,
             symbol: args.symbol,
-            txHash: receipt.transactionHash,
+            txHash: txReceipt.transactionHash,
           };
-
-          setResult(newResult);
-
-          // Store in localStorage for persistence
-          try {
-            const stored = localStorage.getItem("basket_baskets") || "[]";
-            const baskets = JSON.parse(stored);
-            baskets.push({
-              ...newResult,
-              createdAt: new Date().toISOString(),
-              admin: address,
-            });
-            localStorage.setItem("basket_baskets", JSON.stringify(baskets));
-          } catch (e) {
-            console.error("Failed to store basket in localStorage:", e);
-          }
 
           return newResult;
         }
@@ -94,9 +83,28 @@ export function useCreateBasket() {
   };
 
   // Parse when receipt is ready
-  if (isConfirmed && receipt && !result) {
-    parseReceipt(receipt);
-  }
+  useEffect(() => {
+    if (isConfirmed && receipt && !result) {
+      const parsed = parseReceipt(receipt as TransactionReceipt);
+      if (parsed) {
+        setResult(parsed);
+        
+        // Store in localStorage for persistence
+        try {
+          const stored = localStorage.getItem("basket_baskets") || "[]";
+          const baskets = JSON.parse(stored);
+          baskets.push({
+            ...parsed,
+            createdAt: new Date().toISOString(),
+            admin: address,
+          });
+          localStorage.setItem("basket_baskets", JSON.stringify(baskets));
+        } catch (e) {
+          console.error("Failed to store basket in localStorage:", e);
+        }
+      }
+    }
+  }, [isConfirmed, receipt, result, address]);
 
   const createBasket = async (name: string, symbol: string, admin?: `0x${string}`) => {
     if (!address) throw new Error("Wallet not connected");
