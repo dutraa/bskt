@@ -38,4 +38,5 @@ scripts/
 backend/.env
 backend/node_modules/
 backend/dist/
+backend/data/
 notes
