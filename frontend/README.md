@@ -124,6 +124,25 @@ npm run lint
 - **Network**: Only Sepolia testnet is supported.
 - **Gas**: You'll need Sepolia ETH for transactions. Get some from [Sepolia Faucet](https://sepoliafaucet.com).
 
+## Vercel Deployment
+
+### Option 1: Deploy via Vercel Dashboard
+
+1. Go to [vercel.com](https://vercel.com) and import your GitHub repo
+2. Set **Root Directory** to `frontend`
+3. Add environment variables:
+   - `NEXT_PUBLIC_WALLETCONNECT_PROJECT_ID` = your WalletConnect project ID
+   - `NEXT_PUBLIC_BASKET_FACTORY_ADDRESS` = `0x7419818Baf1373B5a75ab265C00c2ea0895Bd590`
+   - `NEXT_PUBLIC_POLICY_ENGINE_ADDRESS` = `0x697B79dFdbe5eD6f9d877bBeFac04d7A28be5CA1`
+4. Deploy
+
+### Option 2: Deploy via CLI
+
+```bash
+cd frontend
+npx vercel --prod
+```
+
 ## License
 
 MIT

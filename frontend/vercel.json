@@ -1,0 +1,14 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "framework": "nextjs",
+  "buildCommand": "npm run build",
+  "devCommand": "npm run dev",
+  "installCommand": "npm install",
+  "regions": ["iad1"],
+  "env": {
+    "NEXT_PUBLIC_WALLETCONNECT_PROJECT_ID": "@walletconnect_project_id",
+    "NEXT_PUBLIC_BASKET_FACTORY_ADDRESS": "0x7419818Baf1373B5a75ab265C00c2ea0895Bd590",
+    "NEXT_PUBLIC_POLICY_ENGINE_ADDRESS": "0x697B79dFdbe5eD6f9d877bBeFac04d7A28be5CA1",
+    "NEXT_PUBLIC_MINT_API_URL": "/api/mint"
+  }
+}
