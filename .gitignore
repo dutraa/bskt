@@ -38,3 +38,4 @@ scripts/
 backend/.env
 backend/node_modules/
 backend/dist/
+notes

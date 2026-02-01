@@ -11,19 +11,30 @@ import {
 	TxStatus,
 	consensusMedianAggregation,
 } from '@chainlink/cre-sdk'
-import { encodeAbiParameters, parseAbiParameters, encodeFunctionData, decodeFunctionResult, getAddress } from 'viem'
+import { encodeAbiParameters, parseAbiParameters, encodeFunctionData, decodeFunctionResult, getAddress, createWalletClient, createPublicClient, http } from 'viem'
+import { privateKeyToAccount } from 'viem/accounts'
+import { sepolia } from 'viem/chains'
 import { z } from 'zod'
 
 // ========================================
 // SHIM FOR LOCAL EXECUTION (Node/Bun)
 // ========================================
-// The CRE SDK expects global functions injected by the host. 
+// The CRE SDK expects global functions injected by the host.
 // This shim provides basic mocks to allow the code to run in Bun/Node.
+//
+// LIVE MODE: Set CRE_LIVE_MODE=true to execute real blockchain transactions
 // @ts-ignore
 if (typeof globalThis.log === 'undefined') {
 	const mockFunc = () => { };
 	const mockReturnZero = () => 0;
 	const mockReturnBytes = () => new Uint8Array();
+
+	const IS_LIVE_MODE = process.env.CRE_LIVE_MODE === 'true';
+	if (IS_LIVE_MODE) {
+		console.log('[SHIM] 🔴 LIVE MODE ENABLED - Real blockchain transactions will be executed');
+	} else {
+		console.log('[SHIM] 🟡 MOCK MODE - Set CRE_LIVE_MODE=true for real transactions');
+	}
 
 	// @ts-ignore
 	globalThis.log = (msg: string) => console.log(`[CRE] ${msg}`);
@@ -69,6 +80,59 @@ if (typeof globalThis.log === 'undefined') {
 	const valuesUtil = loadSdkModule('sdk/utils/values/value.js');
 
 	let lastReq: any = null;
+	let lastWriteReportReceiver: string | null = null;
+	let pendingLiveTx: { txHash: Uint8Array; error?: string } | null = null;
+
+	// Helper to execute live blockchain transaction
+	const executeLiveTransaction = async (receiver: string, calldata: `0x${string}`, gasLimit: bigint): Promise<{ txHash: Uint8Array; error?: string }> => {
+		const rpcUrl = process.env.RPC_URL;
+		const privateKey = process.env.PRIVATE_KEY as `0x${string}`;
+
+		if (!rpcUrl || !privateKey) {
+			throw new Error('LIVE MODE requires RPC_URL and PRIVATE_KEY environment variables');
+		}
+
+		console.log(`[LIVE] Executing transaction to ${receiver}`);
+		console.log(`[LIVE] Calldata: ${calldata.slice(0, 66)}...`);
+
+		const account = privateKeyToAccount(privateKey);
+		const publicClient = createPublicClient({
+			chain: sepolia,
+			transport: http(rpcUrl),
+		});
+		const walletClient = createWalletClient({
+			account,
+			chain: sepolia,
+			transport: http(rpcUrl),
+		});
+
+		try {
+			const hash = await walletClient.sendTransaction({
+				to: receiver as `0x${string}`,
+				data: calldata,
+				gas: gasLimit,
+			});
+
+			console.log(`[LIVE] Transaction sent: ${hash}`);
+			console.log(`[LIVE] Waiting for confirmation...`);
+
+			const receipt = await publicClient.waitForTransactionReceipt({ hash });
+			console.log(`[LIVE] Transaction confirmed in block ${receipt.blockNumber}`);
+			console.log(`[LIVE] Etherscan: https://sepolia.etherscan.io/tx/${hash}`);
+
+			// Convert hex hash to Uint8Array
+			const hashBytes = new Uint8Array(32);
+			const cleanHash = hash.slice(2); // Remove '0x'
+			for (let i = 0; i < 32; i++) {
+				hashBytes[i] = parseInt(cleanHash.slice(i * 2, i * 2 + 2), 16);
+			}
+
+			return { txHash: hashBytes };
+		} catch (error: any) {
+			console.error(`[LIVE] Transaction failed:`, error.message);
+			return { txHash: new Uint8Array(32), error: error.message };
+		}
+	};
 
 	// @ts-ignore
 	globalThis.callCapability = (reqBytes: Uint8Array) => {
@@ -76,6 +140,25 @@ if (typeof globalThis.log === 'undefined') {
 			const req = fromBinary(sdkPb.CapabilityRequestSchema, reqBytes);
 			lastReq = req;
 			console.log(`[DEBUG] Capability call: ${req.id} method: ${req.method} callbackId: ${req.callbackId}`);
+
+			// For WriteReport, extract and store the receiver address for live mode
+			if (req.method === 'WriteReport' && IS_LIVE_MODE) {
+				try {
+					// The payload contains the WriteReportRequest protobuf
+					const writeReqSchema = evmPb?.WriteReportRequestSchema;
+					if (writeReqSchema && req.payload) {
+						const { unpack } = require('@bufbuild/protobuf/wkt');
+						const writeReq = unpack(req.payload, writeReqSchema);
+						if (writeReq?.receiver) {
+							lastWriteReportReceiver = writeReq.receiver;
+							console.log(`[LIVE] WriteReport receiver: ${lastWriteReportReceiver}`);
+						}
+					}
+				} catch (e: any) {
+					console.log(`[DEBUG] Could not extract receiver: ${e.message}`);
+				}
+			}
+
 			return 0; // Success
 		} catch (e: any) {
 			console.error('[SHIM ERROR] callCapability failed:', e.message);
@@ -97,20 +180,190 @@ if (typeof globalThis.log === 'undefined') {
 
 			if (lastReq.method === 'Report') {
 				responseSchema = sdkPb.ReportResponseSchema;
+				// In live mode, we still need to provide a mock report structure
+				// The actual calldata will be reconstructed from the payload file
+				const payloadPath = path.join(process.cwd(), 'http_trigger_payload.json');
+				let rawReport = new Uint8Array([0xde, 0xad, 0xbe, 0xef]);
+
+				if (IS_LIVE_MODE) {
+					try {
+						const payloadContent = fs.readFileSync(payloadPath, 'utf-8');
+						const payload = JSON.parse(payloadContent);
+
+						if (payload.messageType === 'CREATE_BASKET') {
+							// Encode the createBasket calldata
+							const BasketFactoryABI = [{
+								type: 'function',
+								name: 'createBasket',
+								inputs: [
+									{ name: 'name', type: 'string' },
+									{ name: 'symbol', type: 'string' },
+									{ name: 'admin', type: 'address' },
+								],
+								outputs: [
+									{ name: 'stablecoin', type: 'address' },
+									{ name: 'mintingConsumer', type: 'address' },
+								],
+								stateMutability: 'external',
+							}] as const;
+
+							const calldata = encodeFunctionData({
+								abi: BasketFactoryABI,
+								functionName: 'createBasket',
+								args: [payload.basketName, payload.basketSymbol, getAddress(payload.basketAdmin)],
+							});
+							rawReport = new Uint8Array(Buffer.from(calldata.slice(2), 'hex'));
+							console.log(`[LIVE] Prepared createBasket calldata for ${payload.basketName}`);
+						}
+					} catch (e: any) {
+						console.log(`[DEBUG] Could not prepare live calldata: ${e.message}`);
+					}
+				}
+
 				responsePayload = {
 					configDigest: new Uint8Array(32).fill(0x01),
 					seqNr: 1n,
 					reportContext: new Uint8Array(32).fill(0x02),
-					rawReport: new Uint8Array([0xde, 0xad, 0xbe, 0xef]),
+					rawReport,
 					sigs: [{ signature: new Uint8Array(65).fill(0x03), signerId: 1 }]
 				};
 			} else if (lastReq.method === 'WriteReport') {
 				responseSchema = evmPb ? evmPb.WriteReportReplySchema : null;
-				responsePayload = {
-					txStatus: 2, // SUCCESS
-					txHash: new Uint8Array(32).fill(0xaa),
-					errorMessage: ""
-				};
+
+				if (IS_LIVE_MODE) {
+					// Execute real transaction
+					const payloadPath = path.join(process.cwd(), 'http_trigger_payload.json');
+					const configPath = path.join(process.cwd(), 'config.json');
+
+					try {
+						const payloadContent = fs.readFileSync(payloadPath, 'utf-8');
+						const payload = JSON.parse(payloadContent);
+						const configContent = fs.readFileSync(configPath, 'utf-8');
+						const config = JSON.parse(configContent);
+
+						if (payload.messageType === 'CREATE_BASKET') {
+							const factoryAddress = config.sepolia?.basketFactoryAddress;
+							if (!factoryAddress) {
+								throw new Error('basketFactoryAddress not found in config.json');
+							}
+
+							// Encode the createBasket calldata
+							const BasketFactoryABI = [{
+								type: 'function',
+								name: 'createBasket',
+								inputs: [
+									{ name: 'name', type: 'string' },
+									{ name: 'symbol', type: 'string' },
+									{ name: 'admin', type: 'address' },
+								],
+								outputs: [
+									{ name: 'stablecoin', type: 'address' },
+									{ name: 'mintingConsumer', type: 'address' },
+								],
+								stateMutability: 'external',
+							}] as const;
+
+							const calldata = encodeFunctionData({
+								abi: BasketFactoryABI,
+								functionName: 'createBasket',
+								args: [payload.basketName, payload.basketSymbol, getAddress(payload.basketAdmin)],
+							}) as `0x${string}`;
+
+							// Execute synchronously using top-level await workaround
+							const { execSync } = require('child_process');
+							const rpcUrl = process.env.RPC_URL;
+							const privateKey = process.env.PRIVATE_KEY;
+
+							console.log(`[LIVE] Sending createBasket to ${factoryAddress}...`);
+
+							// Execute via bun subprocess from workflow dir (where node_modules exists)
+							const txScript = `
+								import { createWalletClient, createPublicClient, http } from 'viem';
+								import { privateKeyToAccount } from 'viem/accounts';
+								import { sepolia } from 'viem/chains';
+
+								const account = privateKeyToAccount('${privateKey}' as \`0x\${string}\`);
+								const publicClient = createPublicClient({ chain: sepolia, transport: http('${rpcUrl}') });
+								const walletClient = createWalletClient({ account, chain: sepolia, transport: http('${rpcUrl}') });
+
+								const hash = await walletClient.sendTransaction({
+									to: '${factoryAddress}' as \`0x\${string}\`,
+									data: '${calldata}' as \`0x\${string}\`,
+									gas: 5000000n,
+								});
+
+								await publicClient.waitForTransactionReceipt({ hash });
+								console.log(hash);
+							`;
+
+							// Save script in workflow directory (has access to node_modules)
+							const tempFile = path.join(process.cwd(), `_tx-${Date.now()}.ts`);
+							fs.writeFileSync(tempFile, txScript);
+
+							try {
+								const result = execSync(`bun run ${tempFile}`, {
+									encoding: 'utf-8',
+									cwd: process.cwd(),  // Run from workflow dir
+									env: process.env,
+									timeout: 120000  // 2 minute timeout
+								}).trim();
+
+								fs.unlinkSync(tempFile);
+
+								// Parse the transaction hash
+								const txHash = result.split('\n').pop()?.trim() || '';
+								if (txHash.startsWith('0x') && txHash.length === 66) {
+									console.log(`[LIVE] ✅ Transaction confirmed: ${txHash}`);
+									console.log(`[LIVE] Etherscan: https://sepolia.etherscan.io/tx/${txHash}`);
+
+									const hashBytes = new Uint8Array(32);
+									const cleanHash = txHash.slice(2);
+									for (let i = 0; i < 32; i++) {
+										hashBytes[i] = parseInt(cleanHash.slice(i * 2, i * 2 + 2), 16);
+									}
+
+									responsePayload = {
+										txStatus: 2, // SUCCESS
+										txHash: hashBytes,
+										errorMessage: ""
+									};
+								} else {
+									throw new Error(`Invalid transaction hash: ${result}`);
+								}
+							} catch (execError: any) {
+								try { fs.unlinkSync(tempFile); } catch {}
+								console.error(`[LIVE] ❌ Transaction failed: ${execError.message}`);
+								responsePayload = {
+									txStatus: 3, // FAILED
+									txHash: new Uint8Array(32),
+									errorMessage: execError.message
+								};
+							}
+						} else {
+							// For MINT, fall back to mock for now (would need similar treatment)
+							console.log(`[LIVE] MINT live mode not yet implemented, using mock`);
+							responsePayload = {
+								txStatus: 2,
+								txHash: new Uint8Array(32).fill(0xaa),
+								errorMessage: ""
+							};
+						}
+					} catch (e: any) {
+						console.error(`[LIVE] Error in live execution: ${e.message}`);
+						responsePayload = {
+							txStatus: 3,
+							txHash: new Uint8Array(32),
+							errorMessage: e.message
+						};
+					}
+				} else {
+					// Mock mode
+					responsePayload = {
+						txStatus: 2, // SUCCESS
+						txHash: new Uint8Array(32).fill(0xaa),
+						errorMessage: ""
+					};
+				}
 			} else if (lastReq.method === 'CallContract') {
 				responseSchema = evmPb ? evmPb.CallContractReplySchema : null;
 				// Return mock supply (1,000,000 tokens)
