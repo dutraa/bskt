@@ -1,5 +1,5 @@
 {
   "lastUpdated": "2025-10-29T00:00:00Z",
-  "totalReserve": 500000.00,
+  "totalReserve": 1000000.00,
   "_comment": "Mock Proof of Reserve API response. In production, this would come from a real PoR endpoint like Chainlink Data Feeds or Verinumus API."
 }

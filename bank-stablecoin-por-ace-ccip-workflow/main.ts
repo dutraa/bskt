@@ -97,17 +97,14 @@ const validateProofOfReserve = (
 ): boolean => {
 	runtime.log('\n[PoR Validation] Fetching reserve data...')
 
-	// For mock data (file:// URL), use hardcoded values
-	// In production, this would fetch from a real PoR API endpoint
 	let reserveData: { totalReserve: number; lastUpdated: string }
 
 	if (config.porApiUrl.startsWith('file://')) {
-		// Mock PoR data (matching mock-por-response.json)
-		reserveData = {
-			totalReserve: 500000.00,  // 500,000 USD in reserves
-			lastUpdated: '2025-10-29T00:00:00Z',
-		}
-		runtime.log('Using mock PoR data for demo')
+		   reserveData = {
+			   totalReserve: 1000000.00,  // 1,000,000 USD in reserves (hardcoded for WASM compatibility)
+			   lastUpdated: '2025-10-29T00:00:00Z',
+		   }
+		   runtime.log('Using hardcoded mock PoR data for demo')
 	} else {
 		// Fetch from real PoR API in node mode
 		reserveData = runtime.runInNodeMode(
@@ -117,7 +114,6 @@ const validateProofOfReserve = (
 					url: config.porApiUrl,
 					method: 'GET',
 				}).result()
-				
 				const data = JSON.parse(new TextDecoder().decode(response.body))
 				return {
 					totalReserve: data.totalReserve,
@@ -132,23 +128,25 @@ const validateProofOfReserve = (
 
 	// Scale reserves to wei (18 decimals)
 	const reservesWei = BigInt(Math.floor(reserveData.totalReserve * (10 ** config.decimals)))
-	
-	runtime.log(`Reserves: ${reservesWei} wei (${reserveData.totalReserve} USD)`)
-	runtime.log(`Requested Mint: ${mintAmount} wei`)
 
-	// Simplified PoR validation for demo
-	// In production, you would read totalSupply() from StablecoinERC20 and compare:
-	// if (reservesWei < currentSupply + mintAmount) { throw error }
-	//
-	// For this demo, we just check if reserves can cover the mint amount
-	if (reservesWei < mintAmount) {
-		throw new Error(
-			`[PoR FAILED] Insufficient reserves: have ${reservesWei} wei (${reserveData.totalReserve} USD), need ${mintAmount} wei for this mint`
-		)
+	// Fetch current on-chain supply (simulate/mock for now)
+	// TODO: Replace with actual on-chain call if available
+	const MOCK_TOTAL_SUPPLY = BigInt(900000) * BigInt(10 ** config.decimals)
+	runtime.log(`[PoR] On-Chain Total Supply: ${Number(MOCK_TOTAL_SUPPLY / BigInt(10 ** config.decimals))} USD`)
+
+	const projectedSupply = MOCK_TOTAL_SUPPLY + mintAmount
+	runtime.log(`[PoR] Projected Total Supply: ${Number(projectedSupply / BigInt(10 ** config.decimals))} USD`)
+
+	if (reservesWei >= projectedSupply) {
+		runtime.log(`\n✅ SUCCESS: PoR Secure Mint Passed!`)
+		runtime.log(`   Reserves (${Number(reservesWei / BigInt(10 ** config.decimals))} USD) fully back projected supply (${Number(projectedSupply / BigInt(10 ** config.decimals))} USD).`)
+		return true
+	} else {
+		const deficit = projectedSupply - reservesWei
+		runtime.log(`\n❌ FAILED: PoR Secure Mint Rejected!`)
+		runtime.log(`   Insufficient reserves. Deficit: ${Number(deficit / BigInt(10 ** config.decimals))} USD.`)
+		throw new Error(`[PoR FAILED] Insufficient reserves: have ${reservesWei} wei (${reserveData.totalReserve} USD), need ${projectedSupply} wei for this mint`)
 	}
-
-	runtime.log(`✓ PoR validation passed - reserves (${reserveData.totalReserve} USD) can cover mint`)
-	return true
 }
 
 // ========================================
