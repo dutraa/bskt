@@ -27,7 +27,8 @@ function loadBaskets(): Record<string, BasketConfig> {
 
 function saveBaskets(baskets: Record<string, BasketConfig>): void {
   writeFileSync(basketsPath, JSON.stringify(baskets, null, 2) + '\n', 'utf-8');
-  const homeBasketsPath = join(homedir(), 'baskets.json');
+  const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+  const homeBasketsPath = join(homedir(), `baskets-${timestamp}.json`);
   copyFileSync(basketsPath, homeBasketsPath);
   console.log(`[Publish Basket] Copied baskets.json to ${homeBasketsPath}`);
 }
