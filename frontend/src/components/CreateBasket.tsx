@@ -3,6 +3,7 @@
 import { useState, useEffect } from "react";
 import { useAccount } from "wagmi";
 import { useCreateBasket, BasketCreatedResult } from "@/hooks/useBasketFactory";
+import { usePublishBasket } from "@/hooks/usePublishBasket";
 
 interface CreateBasketProps {
   onBasketCreated: (result: BasketCreatedResult) => void;
@@ -25,6 +26,14 @@ export function CreateBasket({ onBasketCreated }: CreateBasketProps) {
     reset,
   } = useCreateBasket();
 
+  const {
+    publishBasket,
+    isPublishing,
+    publishError,
+    isPublished,
+    reset: resetPublish,
+  } = usePublishBasket();
+
   // Set admin to connected wallet address by default
   useEffect(() => {
     if (address && !admin) {
@@ -38,6 +47,18 @@ export function CreateBasket({ onBasketCreated }: CreateBasketProps) {
       onBasketCreated(result);
     }
   }, [result, onBasketCreated]);
+
+  // Auto-publish basket to backend when created
+  useEffect(() => {
+    if (result && !isPublished && !isPublishing && !publishError) {
+      publishBasket({
+        name: result.name,
+        symbol: result.symbol,
+        stablecoinAddress: result.stablecoinAddress,
+        mintingConsumerAddress: result.mintingConsumerAddress,
+      });
+    }
+  }, [result, isPublished, isPublishing, publishError, publishBasket]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -116,7 +137,48 @@ export function CreateBasket({ onBasketCreated }: CreateBasketProps) {
             </div>
           </div>
 
-          <button onClick={reset} className="btn-secondary w-full">
+          {/* Backend Publishing Status */}
+          {isPublishing && (
+            <div className="bg-indigo-500/10 border border-indigo-500/30 rounded-lg p-3">
+              <div className="flex items-center gap-2 text-indigo-400">
+                <svg className="animate-spin h-4 w-4" fill="none" viewBox="0 0 24 24">
+                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
+                </svg>
+                <span className="text-sm">Publishing basket to backend...</span>
+              </div>
+            </div>
+          )}
+
+          {isPublished && (
+            <div className="bg-emerald-500/10 border border-emerald-500/30 rounded-lg p-3">
+              <div className="flex items-center gap-2 text-emerald-400">
+                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                </svg>
+                <span className="text-sm font-medium">Basket published to backend!</span>
+              </div>
+              <p className="text-xs text-emerald-300/70 mt-1 ml-6">
+                You can now mint {result.symbol} tokens using the mint request.
+              </p>
+            </div>
+          )}
+
+          {publishError && (
+            <div className="bg-amber-500/10 border border-amber-500/30 rounded-lg p-3">
+              <div className="flex items-center gap-2 text-amber-400">
+                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+                </svg>
+                <span className="text-sm">Failed to publish to backend</span>
+              </div>
+              <p className="text-xs text-amber-300/70 mt-1 ml-6">
+                {publishError}. You can still use hardcoded baskets (DUSD, AUDT) for minting.
+              </p>
+            </div>
+          )}
+
+          <button onClick={() => { reset(); resetPublish(); }} className="btn-secondary w-full">
             Create Another Basket
           </button>
         </div>

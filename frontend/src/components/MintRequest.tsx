@@ -1,15 +1,22 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { useAccount } from "wagmi";
 import { useMintRequest } from "@/hooks/useMintRequest";
 import { BasketCreatedResult } from "@/hooks/useBasketFactory";
 
-// Supported baskets from backend
-const SUPPORTED_BASKETS = [
-  { id: "DUSD", name: "Demo USD", symbol: "DUSD" },
-  { id: "AUDT", name: "AUD Token", symbol: "AUDT" },
+// Default supported baskets from backend
+const DEFAULT_BASKETS = [
+  { id: "DUSD", name: "Demo USD", symbol: "DUSD", isDefault: true },
+  { id: "AUDT", name: "AUD Token", symbol: "AUDT", isDefault: true },
 ];
+
+interface BasketOption {
+  id: string;
+  name: string;
+  symbol: string;
+  isDefault?: boolean;
+}
 
 interface MintRequestProps {
   basket: BasketCreatedResult | null;
@@ -21,8 +28,44 @@ export function MintRequest({ basket, onMintComplete }: MintRequestProps) {
   const [amount, setAmount] = useState("1000");
   const [beneficiary, setBeneficiary] = useState("");
   const [selectedBasket, setSelectedBasket] = useState("DUSD");
+  const [availableBaskets, setAvailableBaskets] = useState<BasketOption[]>(DEFAULT_BASKETS);
 
   const { requestMint, isLoading, result, error, reset } = useMintRequest();
+
+  // Load user-created baskets from localStorage
+  const loadUserBaskets = useCallback(() => {
+    try {
+      const stored = localStorage.getItem("basket_baskets");
+      if (stored) {
+        const userBaskets = JSON.parse(stored) as Array<{
+          name: string;
+          symbol: string;
+          stablecoinAddress: string;
+        }>;
+        const userBasketOptions: BasketOption[] = userBaskets.map((b) => ({
+          id: b.symbol,
+          name: b.name,
+          symbol: b.symbol,
+          isDefault: false,
+        }));
+        // Combine default + user baskets, avoiding duplicates by symbol
+        const allBaskets = [...DEFAULT_BASKETS];
+        userBasketOptions.forEach((ub) => {
+          if (!allBaskets.find((b) => b.symbol === ub.symbol)) {
+            allBaskets.push(ub);
+          }
+        });
+        setAvailableBaskets(allBaskets);
+      }
+    } catch (e) {
+      console.error("Failed to load user baskets:", e);
+    }
+  }, []);
+
+  // Load baskets on mount and when basket prop changes
+  useEffect(() => {
+    loadUserBaskets();
+  }, [loadUserBaskets, basket]);
 
   // Set beneficiary to connected wallet by default
   useEffect(() => {
@@ -105,7 +148,7 @@ export function MintRequest({ basket, onMintComplete }: MintRequestProps) {
           <div>
             <label htmlFor="basket" className="label">
               Select Basket
-              <span className="text-slate-500 font-normal ml-2">(supported tokens)</span>
+              <span className="text-slate-500 font-normal ml-2">(available tokens)</span>
             </label>
             <select
               id="basket"
@@ -114,12 +157,17 @@ export function MintRequest({ basket, onMintComplete }: MintRequestProps) {
               className="input"
               disabled={isLoading}
             >
-              {SUPPORTED_BASKETS.map((b) => (
+              {availableBaskets.map((b) => (
                 <option key={b.id} value={b.id}>
-                  {b.name} ({b.symbol})
+                  {b.name} ({b.symbol}){b.isDefault ? "" : " ✨"}
                 </option>
               ))}
             </select>
+            {availableBaskets.length > DEFAULT_BASKETS.length && (
+              <p className="text-xs text-emerald-400 mt-1">
+                ✨ = Your published baskets
+              </p>
+            )}
           </div>
 
           <div>
@@ -176,7 +224,7 @@ export function MintRequest({ basket, onMintComplete }: MintRequestProps) {
                 <p className="font-medium mb-1">Live Backend Connected</p>
                 <p className="text-green-300/70 text-xs">
                   This calls the CRE workflow backend on AWS.
-                  Currently supports AUDT and DUSD baskets.
+                  Supports AUDT, DUSD, and your published baskets.
                 </p>
               </div>
             </div>
