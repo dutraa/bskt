@@ -154,7 +154,7 @@ export function VerifyBalance({ basket }: VerifyBalanceProps) {
                 </div>
                 <div>
                   <p className="font-semibold text-white">{name || "Your Created Basket"}</p>
-                  <p className="text-xs text-amber-400">Note: Backend doesn&apos;t mint to this yet</p>
+                  <p className="text-xs text-emerald-400">Select this in Request Mint to receive tokens</p>
                 </div>
               </div>
               <div className="text-xs font-mono text-slate-500 break-all mb-3">
@@ -198,16 +198,16 @@ export function VerifyBalance({ basket }: VerifyBalanceProps) {
           )}
 
           {/* Info note */}
-          <div className="bg-amber-500/10 border border-amber-500/30 rounded-lg p-3">
+          <div className="bg-indigo-500/10 border border-indigo-500/30 rounded-lg p-3">
             <div className="flex items-start gap-2">
-              <svg className="w-5 h-5 text-amber-400 mt-0.5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <svg className="w-5 h-5 text-indigo-400 mt-0.5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
               </svg>
-              <div className="text-sm text-amber-200">
-                <p className="font-medium mb-1">Hackathon Note</p>
-                <p className="text-amber-300/70 text-xs">
-                  The backend currently mints only to the hardcoded DUSD token.
-                  Dynamic basket support will be added later.
+              <div className="text-sm text-indigo-200">
+                <p className="font-medium mb-1">How It Works</p>
+                <p className="text-indigo-300/70 text-xs">
+                  Create a basket, then select it in Request Mint to receive tokens.
+                  Published baskets are automatically registered with the backend.
                 </p>
               </div>
             </div>
